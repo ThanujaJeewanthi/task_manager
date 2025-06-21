@@ -2,16 +2,18 @@
 
 namespace App\Http\Controllers\Task;
 
-use App\Http\Controllers\Controller;
-use App\Models\Task;
-use App\Models\TaskExtensionRequest;
-use App\Models\Employee;
+use Carbon\Carbon;
 use App\Models\Job;
+use App\Models\Task;
+use App\Models\Employee;
 use App\Models\JobEmployee;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
-use Carbon\Carbon;
+
+use App\Http\Controllers\Controller;
+use App\Models\TaskExtensionRequest;
+use Illuminate\Support\Facades\Auth;
+use App\Services\JobActivityLogger;
 
 class TaskExtensionController extends Controller
 {
@@ -98,56 +100,46 @@ class TaskExtensionController extends Controller
     /**
      * Store task extension request
      */
-    public function store(Request $request, Task $task)
+     public function requestTaskExtension(Request $request, Task $task)
     {
-        $employee = Employee::where('user_id', Auth::id())->first();
-
-        if (!$employee) {
-            abort(403, 'Employee record not found.');
-        }
-
-        // Get job employee record to get current end date
-        $jobEmployee = JobEmployee::where('task_id', $task->id)
-            ->where('employee_id', $employee->id)
-            ->first();
-
-        if (!$jobEmployee) {
-            abort(403, 'You are not assigned to this task.');
-        }
-
-        // Check if current end date exists
-        if (!$jobEmployee->end_date) {
-            return redirect()->back()->with('error', 'Cannot request extension as no current end date is set.');
-        }
-
-        // Validate request
         $request->validate([
-            'requested_end_date' => 'required|date|after:' . $jobEmployee->end_date,
-            'reason' => 'required|string|max:500',
+            'requested_end_date' => 'required|date|after:today',
+            'reason' => 'required|string|max:1000',
             'justification' => 'nullable|string|max:1000',
         ]);
-
-        // Check if there's already a pending request
-        $existingRequest = TaskExtensionRequest::where('task_id', $task->id)
-            ->where('employee_id', $employee->id)
-            ->where('status', 'pending')
-            ->first();
-
-        if ($existingRequest) {
-            return redirect()->back()->with('error', 'You already have a pending extension request for this task.');
-        }
 
         try {
             DB::beginTransaction();
 
+            $job = $task->job;
+            $employee = Employee::where('user_id', Auth::id())->first();
+
+            if (!$employee) {
+                throw new \Exception('Employee record not found.');
+            }
+
+            // Get current end date
+            $jobEmployee = JobEmployee::where('task_id', $task->id)
+                ->where('employee_id', $employee->id)
+                ->first();
+
+            if (!$jobEmployee) {
+                throw new \Exception('Task assignment not found.');
+            }
+
+            $currentEndDate = $jobEmployee->end_date;
+            $requestedEndDate = $request->requested_end_date;
+            $extensionDays = \Carbon\Carbon::parse($requestedEndDate)->diffInDays(\Carbon\Carbon::parse($currentEndDate));
+
             // Create extension request
-            TaskExtensionRequest::create([
-                'job_id' => $task->job_id,
+            $extensionRequest = TaskExtensionRequest::create([
+                'job_id' => $job->id,
                 'task_id' => $task->id,
                 'employee_id' => $employee->id,
                 'requested_by' => Auth::id(),
-                'current_end_date' => $jobEmployee->end_date,
-                'requested_end_date' => $request->requested_end_date,
+                'current_end_date' => $currentEndDate,
+                'requested_end_date' => $requestedEndDate,
+                'extension_days' => $extensionDays,
                 'reason' => $request->reason,
                 'justification' => $request->justification,
                 'status' => 'pending',
@@ -155,10 +147,20 @@ class TaskExtensionController extends Controller
                 'updated_by' => Auth::id(),
             ]);
 
+            // Log extension request
+            JobActivityLogger::logTaskExtensionRequested(
+                $job,
+                $task,
+                $employee,
+                $currentEndDate,
+                $requestedEndDate,
+                $request->reason
+            );
+
             DB::commit();
 
-            return redirect()->route('tasks.extension.my-requests')
-                ->with('success', 'Task extension request submitted successfully. Waiting for approval.');
+            return redirect()->back()
+                ->with('success', 'Extension request submitted successfully!');
 
         } catch (\Exception $e) {
             DB::rollBack();
@@ -208,7 +210,9 @@ class TaskExtensionController extends Controller
      */
     public function approve(Request $request, TaskExtensionRequest $extensionRequest)
     {
+
         return $this->processRequest($request, $extensionRequest, 'approved');
+
     }
 
     /**
@@ -222,59 +226,42 @@ class TaskExtensionController extends Controller
     /**
      * Process extension request (approve/reject)
      */
-    private function processRequest(Request $request, TaskExtensionRequest $extensionRequest, $action)
+   public function processTaskExtension(Request $request, TaskExtensionRequest $extensionRequest)
     {
-        $companyId = Auth::user()->company_id;
-        $userRole = Auth::user()->userRole->name ?? '';
-
-        // Validate permissions
-        if ($extensionRequest->job->company_id !== $companyId) {
-            abort(403);
-        }
-
-        if (!$extensionRequest->canBeProcessedBy(Auth::user())) {
-            abort(403, 'You do not have permission to ' . $action . ' this extension request.');
-        }
-
-        if ($extensionRequest->status !== 'pending') {
-            return redirect()->back()->with('error', 'This request has already been processed.');
-        }
-
         $request->validate([
-            'review_notes' => $action === 'rejected' ? 'required|string|max:1000' : 'nullable|string|max:1000',
+            'action' => 'required|in:approve,reject',
+            'review_notes' => 'nullable|string|max:1000',
         ]);
 
         try {
             DB::beginTransaction();
 
+            $job = $extensionRequest->job;
+            $task = $extensionRequest->task;
+            $employee = $extensionRequest->employee;
+            $action = $request->action;
+
             // Update extension request
             $extensionRequest->update([
-                'status' => $action,
+                'status' => $action === 'approve' ? 'approved' : 'rejected',
                 'reviewed_by' => Auth::id(),
                 'reviewed_at' => now(),
                 'review_notes' => $request->review_notes,
                 'updated_by' => Auth::id(),
             ]);
 
-            if ($action === 'approved') {
-                // Update task deadline in job_employees table
-                $updated = JobEmployee::where('task_id', $extensionRequest->task_id)
-                    ->where('employee_id', $extensionRequest->employee_id)
-
+            if ($action === 'approve') {
+                // Update task deadline
+                JobEmployee::where('task_id', $task->id)
+                    ->where('employee_id', $employee->id)
                     ->update([
                         'end_date' => $extensionRequest->requested_end_date,
-                        'duration_in_days' => $this->calculateDuration(
-                            JobEmployee::where('task_id', $extensionRequest->task_id)
-                                ->where('employee_id', $extensionRequest->employee_id)
-
-                                ->first()->start_date,
-                            $extensionRequest->requested_end_date
-                        ),
+                        'duration_in_days' => \Carbon\Carbon::parse($extensionRequest->requested_end_date)
+                            ->diffInDays(\Carbon\Carbon::parse($extensionRequest->current_end_date)) + 1,
                         'updated_by' => Auth::id(),
                     ]);
 
-                // Update job due date if this task extends beyond current job due date
-                $job = $extensionRequest->job;
+                // Update job due date if necessary
                 if (!$job->due_date || $extensionRequest->requested_end_date > $job->due_date) {
                     $job->update([
                         'due_date' => $extensionRequest->requested_end_date,
@@ -283,11 +270,20 @@ class TaskExtensionController extends Controller
                 }
             }
 
+            // Log extension processing
+            JobActivityLogger::logTaskExtensionProcessed(
+                $job,
+                $task,
+                $employee,
+                $action === 'approve' ? 'approved' : 'rejected',
+                $request->review_notes
+            );
+
             DB::commit();
 
-            $message = $action === 'approved'
-                ? 'Task extension request approved successfully. Task deadline has been updated.'
-                : 'Task extension request rejected.';
+            $message = $action === 'approve'
+                ? 'Task extension approved successfully!'
+                : 'Task extension rejected.';
 
             return redirect()->route('tasks.extension.index')
                 ->with('success', $message);
@@ -295,8 +291,7 @@ class TaskExtensionController extends Controller
         } catch (\Exception $e) {
             DB::rollBack();
             return redirect()->back()
-                ->with('error', 'Failed to process extension request. Please try again.')
-                ->withInput();
+                ->with('error', 'Failed to process extension request. Please try again.');
         }
     }
 

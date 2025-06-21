@@ -248,9 +248,20 @@
             </div>
         </div>
         @endif
+
+
+
+
     </div>
     @endif
+       <div class="mt-3 mb-3">
+        <a href="{{ route('jobs.history.index', $job->id) }}" class="btn btn-outline-info btn-sm">
+            <i class="fas fa-history"></i> View Job History
+        </a>
     </div>
+    </div>
+
+
 
   @if($job->status === 'closed')
   <div class="d-component-container mb-4">
@@ -494,7 +505,9 @@
     </div>
 </div>
                         </div>
-                        <div class="row">
+
+
+                        <div class="row me-2" style="margin-left:5px;">
     <div class="col-12">
         @include('jobs.components.timeline')
     </div>

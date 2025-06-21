@@ -5,11 +5,12 @@ namespace App\Http\Controllers\Job;
 use App\Models\Job;
 use App\Models\User;
 use App\Models\UserRole;
-use App\Models\JobAssignment;
 use Illuminate\Http\Request;
+use App\Models\JobAssignment;
+use Illuminate\Support\Facades\DB;
+use App\Services\JobActivityLogger;
 use App\Http\Controllers\Controller;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\DB;
 
 class JobAssignmentController extends Controller
 {
@@ -125,7 +126,9 @@ class JobAssignmentController extends Controller
                 'description' => "Assigned job {$job->id} to {$user->name} as {$request->assignment_type}",
                 'active' => true
             ]);
+            $assignedUser= $user;
 
+JobActivityLogger::logJobAssigned($job, $assignedUser, $request->assignment_type);
             DB::commit();
 
             return redirect()->route('jobs.show', $job)

@@ -307,6 +307,11 @@ class Job extends Model
 
         return round(($completedTasks / $totalTasks) * 100, 1);
     }
+
+    public function activityLogs()
+{
+    return $this->hasMany(JobActivityLog::class);
+}
      public function jobItems()
     {
         return $this->hasMany(JobItems::class);

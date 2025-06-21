@@ -2,15 +2,16 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Controllers\Controller;
-use App\Http\Controllers\Job\JobController;
-use App\Models\Task;
-use App\Models\JobEmployee;
-use App\Models\Employee;
 use App\Models\Job;
+use App\Models\Task;
+use App\Models\Employee;
+use App\Models\JobEmployee;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use App\Services\JobActivityLogger;
+use App\Http\Controllers\Controller;
+use Illuminate\Support\Facades\Auth;
+use App\Http\Controllers\Job\JobController;
 
 class EmployeeTaskController extends Controller
 {
@@ -69,31 +70,8 @@ class EmployeeTaskController extends Controller
         }
     }
 
-    /**
-     * Complete a task
-     */
     public function completeTask(Request $request, Task $task)
     {
-        $user = Auth::user();
-        $employee = Employee::where('user_id', $user->id)->first();
-
-        if (!$employee) {
-            return response()->json(['error' => 'Employee record not found'], 403);
-        }
-
-        // Check if employee is assigned to this task
-        $jobEmployee = JobEmployee::where('employee_id', $employee->id)
-            ->where('task_id', $task->id)
-            ->first();
-
-        if (!$jobEmployee) {
-            return response()->json(['error' => 'You are not assigned to this task'], 403);
-        }
-
-        if (!in_array($task->status, ['pending', 'in_progress'])) {
-            return response()->json(['error' => 'Task cannot be completed'], 400);
-        }
-
         $request->validate([
             'completion_notes' => 'nullable|string|max:1000',
         ]);
@@ -101,31 +79,56 @@ class EmployeeTaskController extends Controller
         try {
             DB::beginTransaction();
 
-            // Update task status
-            $task->update([
-                'status' => 'completed',
-                'updated_by' => Auth::id(),
-            ]);
+            $job = $task->job;
+            $employee = Employee::where('user_id', Auth::id())->first();
 
-            // Update job employee status
-            $jobEmployee->update([
-                'status' => 'completed',
-                'notes' => $request->completion_notes,
-                'end_date' => now()->toDateString(),
-            ]);
+            if (!$employee) {
+                throw new \Exception('Employee record not found.');
+            }
 
-            // Auto-update job status
-            $jobController = new JobController();
-            $jobController->updateJobStatusBasedOnTasks($task->job);
+            // Update task status in job_employees
+            JobEmployee::where('task_id', $task->id)
+                ->where('employee_id', $employee->id)
+                ->update([
+                    'status' => 'completed',
+                    'notes' => $request->completion_notes,
+                ]);
+
+            // Update task status if all employees completed
+            $pendingCount = JobEmployee::where('task_id', $task->id)
+                ->where('status', '!=', 'completed')
+                ->count();
+
+            if ($pendingCount === 0) {
+                $task->update(['status' => 'completed']);
+            }
+
+            // Log task completion
+            JobActivityLogger::logTaskCompleted($job, $task, $employee, $request->completion_notes);
+
+            // Check if all tasks are completed to update job status
+            $pendingTasks = Task::where('job_id', $job->id)
+                ->where('status', '!=', 'completed')
+                ->count();
+
+            if ($pendingTasks === 0) {
+                $oldStatus = $job->status;
+                $job->update(['status' => 'completed', 'completed_date' => now()]);
+
+                // Log job completion
+                JobActivityLogger::logJobStatusChanged($job, $oldStatus, 'completed', 'All tasks completed');
+                JobActivityLogger::logJobCompleted($job, 'All tasks have been completed successfully');
+            }
 
             DB::commit();
 
             return redirect()->back()
-                ->with('success', 'Task completed successfully');
+                ->with('success', 'Task completed successfully!');
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return response()->json(['error' => 'Failed to complete task'], 500);
+            return redirect()->back()
+                ->with('error', 'Failed to complete task. Please try again.');
         }
     }
 }

@@ -268,62 +268,59 @@ class SupervisorDashboardController extends Controller
         ));
     }
 
-    public function assignJob(Request $request, Job $job)
+     public function assignJob(Request $request, Job $job)
     {
-        // Check if job belongs to current user's company
-        if ($job->company_id !== Auth::user()->company_id) {
-            abort(403);
-        }
-
         $request->validate([
-            'assigned_user_id' => 'required|exists:users,id',
-            'priority' => 'required|in:1,2,3,4',
-            'due_date' => 'nullable|date|after:today',
-            'assignment_notes' => 'nullable|string|max:1000'
+            'user_id' => 'required|exists:users,id',
+            'assignment_type' => 'required|in:primary,secondary,supervisor,reviewer',
+            'due_date' => 'nullable|date',
+            'assignment_notes' => 'nullable|string|max:500',
         ]);
-
-        // Check if user belongs to same company and has Technical Officer role
-        $user = User::where('id', $request->assigned_user_id)
-                   ->where('company_id', Auth::user()->company_id)
-                   ->whereHas('userRole', function ($query) {
-                       $query->where('name', 'Technical Officer');
-                   })
-                   ->firstOrFail();
 
         try {
             DB::beginTransaction();
 
-            $job->update([
-                'assigned_user_id' => $request->assigned_user_id,
-                'priority' => $request->priority,
+            // Check company access
+            if ($job->company_id !== Auth::user()->company_id) {
+                abort(403);
+            }
+
+            $assignedUser = \App\Models\User::find($request->user_id);
+
+            // Create job assignment
+            $assignment = $job->assignments()->create([
+                'user_id' => $request->user_id,
+                'assigned_by' => Auth::id(),
+                'assignment_type' => $request->assignment_type,
                 'due_date' => $request->due_date,
-                'status' => 'pending',
+                'assignment_notes' => $request->assignment_notes,
+                'status' => 'assigned',
+                'created_by' => Auth::id(),
                 'updated_by' => Auth::id(),
             ]);
 
-            // Log the assignment
-            \App\Models\Log::create([
-                'action' => 'job_assigned',
-                'user_id' => Auth::id(),
-                'user_role_id' => Auth::user()->user_role_id,
-                'ip_address' => $request->ip(),
-                'description' => "Assigned job {$job->id} to {$user->name}",
-                'active' => true
-            ]);
+            // Update job assigned_user_id if primary assignment
+            if ($request->assignment_type === 'primary') {
+                $job->update([
+                    'assigned_user_id' => $request->user_id,
+                    'updated_by' => Auth::id(),
+                ]);
+            }
+
+            // Log job assignment
+            JobActivityLogger::logJobAssigned($job, $assignedUser, $request->assignment_type);
 
             DB::commit();
 
-            return response()->json([
-                'success' => true,
-                'message' => "Job assigned to {$user->name} successfully!"
-            ]);
+            return redirect()->route('jobs.show', $job)
+                ->with('success', 'Job assigned successfully!');
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return response()->json(['error' => 'Failed to assign job'], 500);
+            return redirect()->back()
+                ->with('error', 'Failed to assign job. Please try again.');
         }
     }
-
     public function bulkAssignJobs(Request $request)
     {
         $request->validate([

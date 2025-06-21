@@ -459,7 +459,37 @@ Route::fallback(function () {
 });
 
 
+use App\Http\Controllers\Job\JobHistoryController;
 
+// Job History and Activity Logging Routes
+Route::middleware(['auth'])->group(function () {
+
+    // Job History Timeline
+    Route::get('/jobs/{job}/history', [JobHistoryController::class, 'index'])
+        ->name('jobs.history.index')
+        ->middleware('role.permission:11.23'); // Add this permission to your seeds
+
+    // View specific activity details
+    Route::get('/jobs/{job}/history/{activity}', [JobHistoryController::class, 'show'])
+        ->name('jobs.history.show')
+        ->middleware('role.permission:11.24'); // Add this permission to your seeds
+
+    // Export job history as PDF
+    Route::get('/jobs/{job}/history/export/pdf', [JobHistoryController::class, 'exportPdf'])
+        ->name('jobs.history.export.pdf')
+        ->middleware('role.permission:11.25'); // Add this permission to your seeds
+
+    // Export job history as Word document
+    Route::get('/jobs/{job}/history/export/word', [JobHistoryController::class, 'exportWord'])
+        ->name('jobs.history.export.word')
+        ->middleware('role.permission:11.25'); // Same permission as PDF export
+
+    // AJAX endpoint for timeline data (for visual timeline components)
+    Route::get('/jobs/{job}/history/timeline-data', [JobHistoryController::class, 'getTimelineData'])
+        ->name('jobs.history.timeline-data')
+        ->middleware('role.permission:11.23'); // Same as view permission
+
+});
 
 
 
