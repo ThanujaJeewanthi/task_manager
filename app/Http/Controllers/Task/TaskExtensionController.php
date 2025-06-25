@@ -10,10 +10,11 @@ use App\Models\JobEmployee;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
+use App\Services\JobActivityLogger;
+use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\Controller;
 use App\Models\TaskExtensionRequest;
 use Illuminate\Support\Facades\Auth;
-use App\Services\JobActivityLogger;
 
 class TaskExtensionController extends Controller
 {
@@ -100,74 +101,75 @@ class TaskExtensionController extends Controller
     /**
      * Store task extension request
      */
-     public function requestTaskExtension(Request $request, Task $task)
+    public function requestTaskExtension(Request $request, Task $task)
     {
-        $request->validate([
-            'requested_end_date' => 'required|date|after:today',
-            'reason' => 'required|string|max:1000',
-            'justification' => 'nullable|string|max:1000',
-        ]);
+       $request->validate([
+          'requested_end_date' => 'required|date|after:today',
+          'reason' => 'required|string|max:1000',
+          'justification' => 'nullable|string|max:1000',
+       ]);
 
-        try {
-            DB::beginTransaction();
+       try {
+          DB::beginTransaction();
 
-            $job = $task->job;
-            $employee = Employee::where('user_id', Auth::id())->first();
+          $job = Job::findOrFail($task->job_id);
+          $employee = Employee::where('user_id', Auth::id())->first();
 
-            if (!$employee) {
-                throw new \Exception('Employee record not found.');
-            }
+          if (!$employee) {
+             throw new \Exception('Employee record not found.');
+          }
 
-            // Get current end date
-            $jobEmployee = JobEmployee::where('task_id', $task->id)
-                ->where('employee_id', $employee->id)
-                ->first();
+          // Get current end date
+          $jobEmployee = JobEmployee::where('task_id', $task->id)
+             ->where('employee_id', $employee->id)
+             ->first();
 
-            if (!$jobEmployee) {
-                throw new \Exception('Task assignment not found.');
-            }
+          if (!$jobEmployee) {
+             throw new \Exception('Task assignment not found.');
+          }
 
-            $currentEndDate = $jobEmployee->end_date;
-            $requestedEndDate = $request->requested_end_date;
-            $extensionDays = \Carbon\Carbon::parse($requestedEndDate)->diffInDays(\Carbon\Carbon::parse($currentEndDate));
+          $currentEndDate = $jobEmployee->end_date;
+          $requestedEndDate = $request->requested_end_date;
+          $extensionDays = Carbon::parse((string)$requestedEndDate)->diffInDays(Carbon::parse((string)$currentEndDate));
 
-            // Create extension request
-            $extensionRequest = TaskExtensionRequest::create([
-                'job_id' => $job->id,
-                'task_id' => $task->id,
-                'employee_id' => $employee->id,
-                'requested_by' => Auth::id(),
-                'current_end_date' => $currentEndDate,
-                'requested_end_date' => $requestedEndDate,
-                'extension_days' => $extensionDays,
-                'reason' => $request->reason,
-                'justification' => $request->justification,
-                'status' => 'pending',
-                'created_by' => Auth::id(),
-                'updated_by' => Auth::id(),
-            ]);
+          // Create extension request
+          TaskExtensionRequest::create([
+             'job_id' => $job->id,
+             'task_id' => $task->id,
+             'employee_id' => $employee->id,
+             'requested_by' => Auth::id(),
+             'current_end_date' => $currentEndDate,
+             'requested_end_date' => $requestedEndDate,
+             'extension_days' => $extensionDays,
+             'reason' => $request->reason,
+             'justification' => $request->justification,
+             'status' => 'pending',
+             'created_by' => Auth::id(),
+             'updated_by' => Auth::id(),
+          ]);
 
-            // Log extension request
-            JobActivityLogger::logTaskExtensionRequested(
-                $job,
-                $task,
-                $employee,
-                $currentEndDate,
-                $requestedEndDate,
-                $request->reason
-            );
+  
+          // Log extension request
+          JobActivityLogger::logTaskExtensionRequested(
+             $job,
+             $task,
+             $employee,
+             $currentEndDate,
+             $requestedEndDate,
+             $request->reason
+          );
+          DB::commit();
 
-            DB::commit();
+          return redirect()->back()
+             ->with('success', 'Extension request submitted successfully!');
 
-            return redirect()->back()
-                ->with('success', 'Extension request submitted successfully!');
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return redirect()->back()
-                ->with('error', 'Failed to submit extension request. Please try again.')
-                ->withInput();
-        }
+       } catch (\Exception $e) {
+          DB::rollBack();
+          Log::error('Task extension request failed: ' . $e->getMessage(), ['exception' => $e]);
+          return redirect()->back()
+             ->with('error', 'Failed to submit extension request. Please try again. Error: ' . $e->getMessage())
+             ->withInput();
+       }
     }
 
     /**

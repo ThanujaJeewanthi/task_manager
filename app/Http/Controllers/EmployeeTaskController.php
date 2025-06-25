@@ -49,20 +49,24 @@ class EmployeeTaskController extends Controller
                 'updated_by' => Auth::id(),
             ]);
 
-            // Update job employee status
-            $jobEmployee->update([
-                'status' => 'in_progress',
-                'start_date' => now()->toDateString(),
-            ]);
+// Update job employee status
+$jobEmployee->update([
+    'status' => 'in_progress',
+    'start_date' => now()->toDateString(),
+]);
 
-            // Auto-update job status
-            $jobController = new JobController();
-            $jobController->updateJobStatusBasedOnTasks($task->job);
+// Get the job instance
+$job = $task->job;
+
+// Auto-update job status
+$jobController = new JobController();
+$jobController->updateJobStatusBasedOnTasks($job);
+
+DB::commit();
 // After task status update, add:
 JobActivityLogger::logTaskStarted($job, $task, $employee);
-            DB::commit();
-            return redirect()->back()
-                ->with('success', 'Task started successfully');
+return redirect()->back()
+    ->with('success', 'Task started successfully');
 
         } catch (\Exception $e) {
             DB::rollBack();

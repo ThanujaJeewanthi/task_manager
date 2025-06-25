@@ -385,7 +385,7 @@ Route::middleware(['auth'])->group(function () {
         ->name('tasks.extension.create')
         ->middleware('role.permission:12.1');
 
-    Route::post('/tasks/{task}/request-extension', [TaskExtensionController::class, 'store'])
+    Route::post('/tasks/{task}/request-extension', [TaskExtensionController::class, 'requestTaskExtension'])
         ->name('tasks.extension.store')
         ->middleware('role.permission:12.1');
 

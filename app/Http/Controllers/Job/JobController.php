@@ -494,6 +494,9 @@ if (isset($data['assigned_user_id']) && $data['assigned_user_id']) {
                 'updated_by' => Auth::id(),
             ]);
         }
+        
+        // log task creation
+        JobActivityLogger::logTaskCreated($job, $task, $request->employee_ids, Auth::id());
 
         return redirect()->route('jobs.show', $job)->with('success', 'Task created and employees assigned successfully.');
     }
@@ -546,13 +549,15 @@ if (isset($data['assigned_user_id']) && $data['assigned_user_id']) {
                 'start_date' => $request->start_date,
                 'end_date' => $request->end_date,
                 'duration_in_days' => $request->start_date && $request->end_date ?
-                    \Carbon\Carbon::parse($request->start_date)->diffInDays(\Carbon\Carbon::parse($request->end_date)) + 1 : null,
+                    Carbon::parse($request->start_date)->diffInDays(Carbon::parse($request->end_date)) + 1 : null,
                 'status' => 'pending',
                 'notes' => $request->notes,
                 'created_by' => Auth::id(),
                 'updated_by' => Auth::id(),
             ]);
         }
+        // log task update
+        JobActivityLogger::logTaskUpdated($job, $task, $request->employee_ids, Auth::id());
 
         return redirect()->route('jobs.show', $job)->with('success', 'Task updated successfully.');
     }
@@ -1109,6 +1114,8 @@ public function processApproval(Request $request, Job $job)
                 ]);
             }
         }
+        // Log task extension
+        JobActivityLogger::logTaskExtended($job, $task, $request->new_end_date, Auth::id());
 
         return redirect()->route('jobs.index')->with('success', 'New job created with extended task duration.');
     }
@@ -1152,6 +1159,10 @@ public function updateJobStatusBasedOnTasks(Job $job)
              'updated_by' => Auth::id(),
         ]);
     }
+
+    // log the things performed here to the jobactivity log through JobActivityLogger
+    JobActivityLogger::logJobStatusChanged($job, $currentStatus, $newStatus);
+
 }
 
 /**
@@ -1217,6 +1228,9 @@ public function processReview(Request $request, Job $job)
         ]);
 
         DB::commit();
+         // log job review
+     JobActivityLogger::logJobReviewed($job, $request->review_notes, Auth::id());
+
 
         return redirect()->route('jobs.show', $job)
             ->with('success', 'Job has been reviewed and closed successfully.');
@@ -1226,6 +1240,7 @@ public function processReview(Request $request, Job $job)
         return redirect()->back()
             ->with('error', 'Failed to process review. Please try again.');
     }
+
 }
 
 // Add method to get status color for consistent display

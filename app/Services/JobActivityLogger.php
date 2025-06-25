@@ -229,6 +229,51 @@ public static function logTaskStarted(Job $job, $task, $employee)
         ]);
     }
 
+    public static  function logTaskExtended(Job $job, $task, $oldEndDate, $newEndDate, $notes = null)
+    {
+        return self::log([
+            'job_id' => $job->id,
+            'activity_type' => 'extended',
+            'activity_category' => 'task',
+            'priority_level' => 'medium',
+            'is_major_activity' => true,
+            'description' => "Task '{$task->task}' extended from {$oldEndDate} to {$newEndDate}" . ($notes ? " - {$notes}" : ''),
+            'old_values' => [
+                'end_date' => $oldEndDate,
+            ],
+            'new_values' => [
+                'end_date' => $newEndDate,
+                'notes' => $notes,
+            ],
+            'related_model_type' => 'Task',
+            'related_model_id' => $task->id,
+            'related_entity_name' => $task->task,
+            'metadata' => [
+                'notes' => $notes,
+                'extension_days' => \Carbon\Carbon::parse($newEndDate)->diffInDays(\Carbon\Carbon::parse($oldEndDate)),
+            ],
+        ]);
+    }
+    public static function logJobReviewed(Job $job, $reviewer, $notes = null)
+    {
+        return self::log([
+            'job_id' => $job->id,
+            'activity_type' => 'reviewed',
+            'activity_category' => 'job',
+            'priority_level' => 'medium',
+            'is_major_activity' => true,
+            'description' => "Job reviewed by {$reviewer->name}" . ($notes ? " - {$notes}" : ''),
+            'affected_user_id' => $reviewer->id,
+            'new_values' => [
+                'reviewed_by' => $reviewer->name,
+                'review_notes' => $notes,
+                'reviewed_at' => now(),
+            ],
+            'metadata' => [
+                'review_notes' => $notes,
+            ],
+        ]);
+    }
 
    public static function logJobItemsAdded(Job $job, $items, $notes = null)
 {
@@ -354,7 +399,7 @@ if (is_array($notes)) {
      */
     public static function logTaskCreated(Job $job, $task, $assignedEmployees = [])
     {
-        $employeeNames = collect($assignedEmployees)->pluck('name')->join(', ');
+        $employeeNames = collect($assignedEmployees)->pluck('username')->join(', ');
 
         return self::log([
             'job_id' => $job->id,
