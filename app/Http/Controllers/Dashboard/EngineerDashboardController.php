@@ -1,16 +1,12 @@
 <?php
-
 namespace App\Http\Controllers\Dashboard;
 
 use App\Http\Controllers\Controller;
 use App\Models\Job;
 use App\Models\Task;
-use App\Models\Client;
-use App\Models\Employee;
-use App\Models\Equipment;
-use App\Models\Item;
-use App\Models\JobType;
 use App\Models\User;
+use App\Models\Equipment;
+use App\Models\JobEmployee;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -19,278 +15,120 @@ use Carbon\Carbon;
 class EngineerDashboardController extends Controller
 {
     public function index()
-{
-    $companyId = Auth::user()->company_id;
+    {
+        $companyId = Auth::user()->company_id;
 
-    // Engineer-specific statistics
-    $stats = [
-        'total_jobs' => Job::where('company_id', $companyId)->where('active', true)->count(),
-        'jobs_pending_approval' => Job::where('company_id', $companyId)
-            ->where('approval_status', 'requested')->where('active', true)->count(),
-        'jobs_approved_by_me' => Job::where('company_id', $companyId)
-            ->where('approved_by', Auth::id())->count(),
-        'jobs_awaiting_review' => Job::where('company_id', $companyId)
-            ->where('status', 'completed')->where('active', true)->count(), // NEW
-        'total_employees' => Employee::where('company_id', $companyId)->where('active', true)->count(),
-        'total_equipment' => Equipment::where('company_id', $companyId)->where('active', true)->count(),
-        'maintenance_equipment' => Equipment::where('company_id', $companyId)
-            ->where('status', 'maintenance')->where('active', true)->count(),
-    ];
-
-    // Job status statistics
-    $jobStats = [
-        'pending_jobs' => Job::where('company_id', $companyId)
-            ->where('status', 'pending')->where('active', true)->count(),
-        'in_progress_jobs' => Job::where('company_id', $companyId)
-            ->where('status', 'in_progress')->where('active', true)->count(),
-        'completed_jobs' => Job::where('company_id', $companyId)
-            ->where('status', 'completed')->count(),
-        'closed_jobs' => Job::where('company_id', $companyId)
-            ->where('status', 'closed')->count(), // NEW
-        'overdue_jobs' => Job::where('company_id', $companyId)
-            ->where('due_date', '<', Carbon::now())
-            ->whereNotIn('status', ['completed', 'closed', 'cancelled'])
-            ->where('active', true)->count(),
-        'high_priority_jobs' => Job::where('company_id', $companyId)
-            ->where('priority', 1)
-            ->whereNotIn('status', ['completed', 'closed', 'cancelled'])
-            ->where('active', true)->count(),
-    ];
-
-    // Task statistics
-    $taskStats = [
-        'pending_tasks' => Task::whereHas('job', function ($query) use ($companyId) {
-            $query->where('company_id', $companyId);
-        })->where('status', 'pending')->where('active', true)->count(),
-
-        'in_progress_tasks' => Task::whereHas('job', function ($query) use ($companyId) {
-            $query->where('company_id', $companyId);
-        })->where('status', 'in_progress')->where('active', true)->count(),
-
-        'completed_tasks' => Task::whereHas('job', function ($query) use ($companyId) {
-            $query->where('company_id', $companyId);
-        })->where('status', 'completed')->count(),
-    ];
-
-    // Jobs requiring approval
-    $jobsForApproval = Job::with(['jobType', 'client', 'equipment', 'jobItems'])
-        ->where('company_id', $companyId)
-        ->where('approval_status', 'requested')
-        ->where('request_approval_from', Auth::id())
-        ->where('active', true)
-        ->orderBy('created_at', 'desc')
-        ->take(10)
-        ->get();
-
-    // NEW: Jobs awaiting review
-    $jobsAwaitingReview = $this->getCompletedJobsAwaitingReview($companyId);
-
-    // Jobs by status for the company
-    $jobsByStatus = Job::where('company_id', $companyId)
-        ->select('status', DB::raw('count(*) as count'))
-        ->where('active', true)
-        ->groupBy('status')
-        ->get()
-        ->pluck('count', 'status');
-
-    // Jobs by priority for the company
-    $jobsByPriority = Job::where('company_id', $companyId)
-        ->select(
-            DB::raw('CASE
-                WHEN priority = 1 THEN "High"
-                WHEN priority = 2 THEN "Medium"
-                WHEN priority = 3 THEN "Low"
-                WHEN priority = 4 THEN "Very Low"
-                ELSE "Unknown"
-            END as priority_label'),
-            DB::raw('count(*) as count')
-        )
-        ->where('active', true)
-        ->groupBy('priority')
-        ->get()
-        ->pluck('count', 'priority_label');
-
-    // Equipment statistics
-    $equipmentStats = Equipment::where('company_id', $companyId)
-        ->select('status', DB::raw('count(*) as count'))
-        ->where('active', true)
-        ->groupBy('status')
-        ->get()
-        ->pluck('count', 'status');
-
-    // Recent jobs - updated to exclude closed jobs from active view
-    $recentJobs = Job::with(['jobType', 'client', 'equipment'])
-        ->where('company_id', $companyId)
-        ->whereNotIn('status', ['closed']) // Exclude closed jobs from recent view
-        ->where('active', true)
-        ->orderBy('created_at', 'desc')
-        ->take(10)
-        ->get();
-
-    // Employee performance summary
-    $employeePerformance = Employee::where('company_id', $companyId)
-        ->with([
-            'jobEmployees' => function ($query) {
-                $query->where('status', 'completed')
-                    ->whereBetween('updated_at', [Carbon::now()->subMonth(), Carbon::now()]);
-            }
-        ])
-        ->where('active', true)
-        ->take(8)
-        ->get();
-
-    // Upcoming deadlines
-    $upcomingDeadlines = Job::where('company_id', $companyId)
-        ->where('due_date', '>=', Carbon::now())
-        ->where('due_date', '<=', Carbon::now()->addDays(7))
-        ->whereNotIn('status', ['completed', 'closed', 'cancelled'])
-        ->where('active', true)
-        ->orderBy('due_date')
-        ->take(10)
-        ->get();
-
-    // Active tasks summary with employee assignments
-    $activeTasks = Task::whereHas('job', function ($query) use ($companyId) {
-            $query->where('company_id', $companyId);
-        })
-        ->where('active', true)
-        ->whereIn('status', ['pending', 'in_progress'])
-        ->with(['job.jobType', 'job.client', 'jobEmployees.employee'])
-        ->orderBy('created_at', 'desc')
-        ->take(10)
-        ->get();
-
-    // Client job distribution
-    $clientJobStats = Client::where('company_id', $companyId)
-        ->withCount([
-            'jobs as total_jobs',
-            'jobs as completed_jobs' => function ($query) {
-                $query->where('status', 'completed');
-            },
-            'jobs as closed_jobs' => function ($query) {
-                $query->where('status', 'closed');
-            },
-            'jobs as pending_jobs' => function ($query) {
-                $query->where('status', 'pending');
-            }
-        ])
-        ->where('active', true)
-        ->orderBy('total_jobs', 'desc')
-        ->take(8)
-        ->get();
-
-    // Engineer-specific alerts - UPDATED
-    $alerts = [];
-
-    if ($stats['jobs_pending_approval'] > 0) {
-        $alerts[] = [
-            'type' => 'warning',
-            'icon' => 'fas fa-clipboard-check',
-            'message' => "{$stats['jobs_pending_approval']} jobs require your approval",
-            'count' => $stats['jobs_pending_approval'],
-            'action' => 'View Approval Queue'
+        // Get general company statistics
+        $stats = [
+            'total_jobs' => Job::where('company_id', $companyId)->where('active', true)->count(),
+            'pending_jobs' => Job::where('company_id', $companyId)->where('status', 'pending')->where('active', true)->count(),
+            'in_progress_jobs' => Job::where('company_id', $companyId)->where('status', 'in_progress')->where('active', true)->count(),
+            'completed_jobs' => Job::where('company_id', $companyId)->where('status', 'completed')->where('active', true)->count(),
+            'jobs_awaiting_approval' => Job::where('company_id', $companyId)->where('approval_status', 'requested')->where('active', true)->count(),
+            'total_users' => User::where('company_id', $companyId)->where('active', true)->count(),
+            'total_equipment' => Equipment::where('company_id', $companyId)->where('active', true)->count(),
         ];
+
+        // Get jobs assigned to this engineer
+        $myJobs = Job::where('company_id', $companyId)
+            ->where('assigned_user_id', Auth::id())
+            ->where('active', true);
+
+        $myJobStats = [
+            'my_assigned_jobs' => $myJobs->count(),
+            'my_pending_jobs' => $myJobs->where('status', 'pending')->count(),
+            'my_in_progress_jobs' => $myJobs->where('status', 'in_progress')->count(),
+            'my_completed_jobs' => $myJobs->where('status', 'completed')->count(),
+        ];
+
+        // Get tasks assigned to this engineer
+        $myTasks = JobEmployee::where('user_id', Auth::id())
+            ->whereHas('job', function ($query) use ($companyId) {
+                $query->where('company_id', $companyId)->where('active', true);
+            })
+            ->with(['job', 'task'])
+            ->get();
+
+        $taskStats = [
+            'total_tasks' => $myTasks->count(),
+            'pending_tasks' => $myTasks->where('status', 'pending')->count(),
+            'in_progress_tasks' => $myTasks->where('status', 'in_progress')->count(),
+            'completed_tasks' => $myTasks->where('status', 'completed')->count(),
+        ];
+
+        // Recent jobs awaiting approval
+        $pendingApprovals = Job::with(['jobType', 'client', 'creator'])
+            ->where('company_id', $companyId)
+            ->where('approval_status', 'requested')
+            ->where('active', true)
+            ->orderBy('created_at', 'desc')
+            ->limit(10)
+            ->get();
+
+        // Recent jobs
+        $recentJobs = Job::with(['jobType', 'client', 'assignedUser'])
+            ->where('company_id', $companyId)
+            ->where('active', true)
+            ->orderBy('created_at', 'desc')
+            ->limit(10)
+            ->get();
+
+        // Performance metrics
+        $performanceStats = [
+            'jobs_completed_this_week' => Job::where('company_id', $companyId)
+                ->where('status', 'completed')
+                ->whereBetween('completed_date', [Carbon::now()->startOfWeek(), Carbon::now()->endOfWeek()])
+                ->count(),
+            'jobs_completed_this_month' => Job::where('company_id', $companyId)
+                ->where('status', 'completed')
+                ->whereMonth('completed_date', Carbon::now()->month)
+                ->whereYear('completed_date', Carbon::now()->year)
+                ->count(),
+            'approval_rate' => $this->getApprovalRate($companyId),
+        ];
+
+        return view('dashboards.engineer', compact(
+            'stats', 'myJobStats', 'taskStats', 'pendingApprovals', 'recentJobs', 'performanceStats'
+        ));
     }
 
-    // NEW: Alert for jobs awaiting review
-    if ($stats['jobs_awaiting_review'] > 0) {
-        $alerts[] = [
-            'type' => 'info',
-            'icon' => 'fas fa-check-double',
-            'message' => "{$stats['jobs_awaiting_review']} completed jobs await your review",
-            'count' => $stats['jobs_awaiting_review'],
-            'action' => 'Review Jobs'
+    public function getQuickStats()
+    {
+        $companyId = Auth::user()->company_id;
+
+        $stats = [
+            'pending_approvals' => Job::where('company_id', $companyId)
+                ->where('approval_status', 'requested')
+                ->where('active', true)
+                ->count(),
+            'my_assigned_jobs' => Job::where('company_id', $companyId)
+                ->where('assigned_user_id', Auth::id())
+                ->where('active', true)
+                ->count(),
+            'my_pending_tasks' => JobEmployee::where('user_id', Auth::id())
+                ->whereHas('job', function ($query) use ($companyId) {
+                    $query->where('company_id', $companyId)->where('active', true);
+                })
+                ->where('status', 'pending')
+                ->count(),
+            'total_active_jobs' => Job::where('company_id', $companyId)
+                ->where('active', true)
+                ->whereIn('status', ['pending', 'in_progress'])
+                ->count(),
         ];
+
+        return response()->json($stats);
     }
-
-    if ($jobStats['overdue_jobs'] > 0) {
-        $alerts[] = [
-            'type' => 'danger',
-            'icon' => 'fas fa-exclamation-triangle',
-            'message' => "{$jobStats['overdue_jobs']} jobs are overdue",
-            'count' => $jobStats['overdue_jobs'],
-            'action' => 'View Overdue Jobs'
-        ];
-    }
-
-    $maintenanceEquipment = $stats['maintenance_equipment'];
-    if ($maintenanceEquipment > 0) {
-        $alerts[] = [
-            'type' => 'warning',
-            'icon' => 'fas fa-tools',
-            'message' => "{$maintenanceEquipment} equipment items need maintenance",
-            'count' => $maintenanceEquipment,
-            'action' => 'View Equipment'
-        ];
-    }
-
-    if ($upcomingDeadlines->count() > 0) {
-        $alerts[] = [
-            'type' => 'info',
-            'icon' => 'fas fa-calendar-alt',
-            'message' => "{$upcomingDeadlines->count()} jobs due in the next 7 days",
-            'count' => $upcomingDeadlines->count(),
-            'action' => 'View Upcoming Jobs'
-        ];
-    }
-
-    if ($jobStats['high_priority_jobs'] > 0) {
-        $alerts[] = [
-            'type' => 'warning',
-            'icon' => 'fas fa-exclamation-circle',
-            'message' => "{$jobStats['high_priority_jobs']} high priority jobs need attention",
-            'count' => $jobStats['high_priority_jobs'],
-            'action' => 'View High Priority Jobs'
-        ];
-    }
-
-    // Monthly job trends for the company (last 6 months)
-    $monthlyJobTrends = Job::where('company_id', $companyId)
-        ->select(
-            DB::raw('DATE_FORMAT(created_at, "%Y-%m") as month'),
-            DB::raw('count(*) as count')
-        )
-        ->where('created_at', '>=', Carbon::now()->subMonths(6))
-        ->where('active', true)
-        ->groupBy('month')
-        ->orderBy('month')
-        ->get();
-
-    return view('dashboard.engineer', compact(
-        'stats',
-        'jobStats',
-        'taskStats',
-        'jobsForApproval',
-        'jobsAwaitingReview', // NEW
-        'equipmentStats',
-        'jobsByStatus',
-        'jobsByPriority',
-        'recentJobs',
-        'employeePerformance',
-        'monthlyJobTrends',
-        'upcomingDeadlines',
-        'activeTasks',
-        'clientJobStats',
-        'alerts'
-    ));
-}
 
     public function approveJob(Request $request, Job $job)
     {
-        // Check if job belongs to current user's company
         if ($job->company_id !== Auth::user()->company_id) {
             abort(403);
         }
 
-        // Check if user has approval rights
-        $userRole = Auth::user()->userRole->name ?? '';
-        if (!in_array($userRole, ['Engineer', 'admin'])) {
-            abort(403, 'You do not have permission to approve jobs.');
-        }
-
         $request->validate([
             'action' => 'required|in:approve,reject',
-            'approval_notes' => 'nullable|string|max:1000',
+            'notes' => 'nullable|string|max:1000',
         ]);
 
         try {
@@ -301,23 +139,32 @@ class EngineerDashboardController extends Controller
                     'approval_status' => 'approved',
                     'approved_by' => Auth::id(),
                     'approved_at' => now(),
-                    'approval_notes' => $request->approval_notes,
-                    'status' => 'pending', // Move to pending for task assignment
+                    'approval_notes' => $request->notes,
                     'updated_by' => Auth::id(),
                 ]);
 
-                $message = 'Job approved successfully. You can now add tasks.';
+                $message = 'Job approved successfully!';
             } else {
                 $job->update([
                     'approval_status' => 'rejected',
                     'rejected_by' => Auth::id(),
                     'rejected_at' => now(),
-                    'rejection_notes' => $request->approval_notes,
+                    'rejection_notes' => $request->notes,
                     'updated_by' => Auth::id(),
                 ]);
 
-                $message = 'Job rejected successfully.';
+                $message = 'Job rejected successfully!';
             }
+
+            // Log the action
+            \App\Models\Log::create([
+                'action' => 'job_' . $request->action . 'd',
+                'user_id' => Auth::id(),
+                'user_role_id' => Auth::user()->user_role_id,
+                'ip_address' => $request->ip(),
+                'description' => ucfirst($request->action) . "d job {$job->id}",
+                'active' => true
+            ]);
 
             DB::commit();
 
@@ -328,72 +175,123 @@ class EngineerDashboardController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return response()->json(['error' => 'Failed to process approval'], 500);
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to ' . $request->action . ' job: ' . $e->getMessage()
+            ], 500);
         }
     }
 
-   public function getQuickStats()
-{
-    $companyId = Auth::user()->company_id;
+    public function bulkApproveJobs(Request $request)
+    {
+        $request->validate([
+            'job_ids' => 'required|array',
+            'job_ids.*' => 'exists:jobs,id',
+            'action' => 'required|in:approve,reject',
+            'notes' => 'nullable|string|max:1000',
+        ]);
 
-    return response()->json([
-        'pending_approvals' => Job::where('company_id', $companyId)
-            ->where('approval_status', 'requested')
-            ->where('request_approval_from', Auth::id())
-            ->where('active', true)
-            ->count(),
-        'jobs_awaiting_review' => Job::where('company_id', $companyId)
-            ->where('status', 'completed')
-            ->where('active', true)
-            ->count(), // NEW
-        'active_jobs' => Job::where('company_id', $companyId)
-            ->where('active', true)
-            ->whereNotIn('status', ['completed', 'closed', 'cancelled'])
-            ->count(),
-        'pending_tasks' => Task::whereHas('job', function ($query) use ($companyId) {
-            $query->where('company_id', $companyId);
-        })->where('status', 'pending')->where('active', true)->count(),
-        'overdue_jobs' => Job::where('company_id', $companyId)
-            ->where('due_date', '<', Carbon::now())
-            ->whereNotIn('status', ['completed', 'closed', 'cancelled'])
-            ->where('active', true)
-            ->count(),
-    ]);
-}
+        $companyId = Auth::user()->company_id;
+
+        try {
+            DB::beginTransaction();
+
+            $jobs = Job::whereIn('id', $request->job_ids)
+                      ->where('company_id', $companyId)
+                      ->where('approval_status', 'requested')
+                      ->get();
+
+            if ($jobs->isEmpty()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No jobs found for approval.'
+                ], 404);
+            }
+
+            foreach ($jobs as $job) {
+                if ($request->action === 'approve') {
+                    $job->update([
+                        'approval_status' => 'approved',
+                        'approved_by' => Auth::id(),
+                        'approved_at' => now(),
+                        'approval_notes' => $request->notes,
+                        'updated_by' => Auth::id(),
+                    ]);
+                } else {
+                    $job->update([
+                        'approval_status' => 'rejected',
+                        'rejected_by' => Auth::id(),
+                        'rejected_at' => now(),
+                        'rejection_notes' => $request->notes,
+                        'updated_by' => Auth::id(),
+                    ]);
+                }
+            }
+
+            // Log bulk action
+            \App\Models\Log::create([
+                'action' => 'bulk_job_' . $request->action,
+                'user_id' => Auth::id(),
+                'user_role_id' => Auth::user()->user_role_id,
+                'ip_address' => $request->ip(),
+                'description' => "Bulk " . $request->action . "d " . $jobs->count() . " jobs",
+                'active' => true
+            ]);
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => $jobs->count() . ' jobs ' . $request->action . 'd successfully!'
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to ' . $request->action . ' jobs: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
     public function getNotificationCounts()
-{
-    $companyId = Auth::user()->company_id;
+    {
+        $companyId = Auth::user()->company_id;
 
-    return response()->json([
-        'jobs_pending_approval' => Job::where('company_id', $companyId)
-            ->where('approval_status', 'requested')
-            ->where('request_approval_from', Auth::id())
-            ->where('active', true)
-            ->count(),
-        'jobs_awaiting_review' => Job::where('company_id', $companyId)
-            ->where('status', 'completed')
-            ->where('active', true)
-            ->count(),
-        'total_notifications' => Job::where('company_id', $companyId)
-            ->where(function($query) {
-                $query->where(function($q) {
-                    $q->where('approval_status', 'requested')
-                      ->where('request_approval_from', Auth::id());
-                })->orWhere('status', 'completed');
-            })
-            ->where('active', true)
-            ->count()
-    ]);
-}
-public function getCompletedJobsAwaitingReview($companyId)
-{
-    return Job::with(['jobType', 'client', 'equipment', 'creator'])
-        ->where('company_id', $companyId)
-        ->where('status', 'completed')
-        ->where('active', true)
-        ->orderBy('completed_date', 'asc')
-        ->take(10)
-        ->get();
-}
+        $counts = [
+            'pending_approvals' => Job::where('company_id', $companyId)
+                ->where('approval_status', 'requested')
+                ->where('active', true)
+                ->count(),
+            'overdue_jobs' => Job::where('company_id', $companyId)
+                ->where('due_date', '<', now())
+                ->whereIn('status', ['pending', 'in_progress'])
+                ->where('active', true)
+                ->count(),
+            'high_priority_jobs' => Job::where('company_id', $companyId)
+                ->where('priority', '1')
+                ->whereIn('status', ['pending', 'in_progress'])
+                ->where('active', true)
+                ->count(),
+        ];
 
+        return response()->json($counts);
+    }
+
+    private function getApprovalRate($companyId)
+    {
+        $totalApprovals = Job::where('company_id', $companyId)
+            ->whereIn('approval_status', ['approved', 'rejected'])
+            ->count();
+
+        if ($totalApprovals === 0) {
+            return 0;
+        }
+
+        $approvedCount = Job::where('company_id', $companyId)
+            ->where('approval_status', 'approved')
+            ->count();
+
+        return round(($approvedCount / $totalApprovals) * 100, 1);
+    }
 }

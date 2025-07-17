@@ -2,49 +2,30 @@
 
 namespace App\Http\Controllers\Job;
 
-use App\Models\Job;
-use App\Models\User;
-use App\Models\UserRole;
-use Illuminate\Http\Request;
-use App\Models\JobAssignment;
-use Illuminate\Support\Facades\DB;
-use App\Services\JobActivityLogger;
 use App\Http\Controllers\Controller;
+use App\Models\Job;
+use App\Models\JobAssignment;
+use App\Models\User;
+use App\Services\JobActivityLogger;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 
 class JobAssignmentController extends Controller
 {
-    public function index(Request $request)
+    public function index()
     {
         $companyId = Auth::user()->company_id;
+        
+        $assignments = JobAssignment::with(['job.jobType', 'user.userRole', 'assignedBy'])
+            ->whereHas('job', function ($query) use ($companyId) {
+                $query->where('company_id', $companyId);
+            })
+            ->where('active', true)
+            ->orderBy('created_at', 'desc')
+            ->paginate(15);
 
-        $query = JobAssignment::with(['job.jobType', 'job.client', 'user.userRole'])
-                             ->whereHas('job', function($q) use ($companyId) {
-                                 $q->where('company_id', $companyId);
-                             })
-                             ->where('active', true);
-
-        // Apply filters
-        if ($request->filled('status')) {
-            $query->where('status', $request->status);
-        }
-
-        if ($request->filled('assignment_type')) {
-            $query->where('assignment_type', $request->assignment_type);
-        }
-
-        if ($request->filled('user_id')) {
-            $query->where('user_id', $request->user_id);
-        }
-
-        $assignments = $query->orderBy('created_at', 'desc')->paginate(15);
-
-        // Get filter options
-        $users = User::where('company_id', $companyId)->where('active', true)->get();
-        $statuses = ['assigned', 'accepted', 'in_progress', 'completed', 'rejected'];
-        $assignmentTypes = ['primary', 'secondary', 'supervisor', 'reviewer'];
-
-        return view('job-assignments.index', compact('assignments', 'users', 'statuses', 'assignmentTypes'));
+        return view('job-assignments.index', compact('assignments'));
     }
 
     public function create(Job $job)
@@ -53,18 +34,13 @@ class JobAssignmentController extends Controller
             abort(403);
         }
 
-        $companyId = Auth::user()->company_id;
-        $users = User::where('company_id', $companyId)
+        // Get all users from same company (removed role restriction)
+        $users = User::where('company_id', Auth::user()->company_id)
                     ->where('active', true)
                     ->with('userRole')
                     ->get();
 
-        $userRoles = UserRole::where('active', true)->get();
-
-        // Get existing assignments for this job
-        $existingAssignments = $job->activeAssignments()->with('user')->get();
-
-        return view('job-assignments.create', compact('job', 'users', 'userRoles', 'existingAssignments'));
+        return view('job-assignments.create', compact('job', 'users'));
     }
 
     public function store(Request $request, Job $job)
@@ -126,9 +102,9 @@ class JobAssignmentController extends Controller
                 'description' => "Assigned job {$job->id} to {$user->name} as {$request->assignment_type}",
                 'active' => true
             ]);
-            $assignedUser= $user;
 
-JobActivityLogger::logJobAssigned($job, $assignedUser, $request->assignment_type);
+            JobActivityLogger::logJobAssigned($job, $user, $request->assignment_type);
+            
             DB::commit();
 
             return redirect()->route('jobs.show', $job)
@@ -146,8 +122,7 @@ JobActivityLogger::logJobAssigned($job, $assignedUser, $request->assignment_type
             abort(403);
         }
 
-        $assignment->load(['job.jobType', 'job.client', 'user.userRole', 'assignedBy']);
-
+        $assignment->load(['job.jobType', 'user.userRole', 'assignedBy']);
         return view('job-assignments.show', compact('assignment'));
     }
 
@@ -157,83 +132,37 @@ JobActivityLogger::logJobAssigned($job, $assignedUser, $request->assignment_type
             abort(403);
         }
 
-        // Only the assigned user can update their assignment status
-        if ($assignment->user_id !== Auth::id()) {
-            return response()->json(['error' => 'You can only update your own assignments'], 403);
-        }
-
         $request->validate([
-            'status' => 'required|in:accepted,rejected,in_progress,completed',
+            'status' => 'required|in:assigned,accepted,in_progress,completed,rejected',
             'notes' => 'nullable|string|max:1000'
         ]);
-
-        $status = $request->status;
-
-        // Validate status transitions
-        switch ($status) {
-            case 'accepted':
-                if (!$assignment->canBeAccepted()) {
-                    return response()->json(['error' => 'Cannot accept this assignment in its current state'], 400);
-                }
-                break;
-            case 'rejected':
-                if (!$assignment->canBeRejected()) {
-                    return response()->json(['error' => 'Cannot reject this assignment in its current state'], 400);
-                }
-                break;
-            case 'in_progress':
-                if (!$assignment->canBeStarted()) {
-                    return response()->json(['error' => 'Cannot start this assignment in its current state'], 400);
-                }
-                break;
-            case 'completed':
-                if (!$assignment->canBeCompleted()) {
-                    return response()->json(['error' => 'Cannot complete this assignment in its current state'], 400);
-                }
-                break;
-        }
 
         try {
             DB::beginTransaction();
 
-            // Update assignment using model methods
-            switch ($status) {
-                case 'accepted':
-                    $assignment->accept($request->notes);
-                    break;
-                case 'rejected':
-                    $assignment->reject($request->notes);
-                    break;
-                case 'in_progress':
-                    $assignment->start($request->notes);
-                    break;
-                case 'completed':
-                    $assignment->complete($request->notes);
-                    break;
-            }
+            $assignment->update([
+                'status' => $request->status,
+                'notes' => $request->notes,
+                'updated_by' => Auth::id()
+            ]);
 
-            // Log the status change
+            // Log status update
             \App\Models\Log::create([
                 'action' => 'job_assignment_status_updated',
                 'user_id' => Auth::id(),
                 'user_role_id' => Auth::user()->user_role_id,
                 'ip_address' => $request->ip(),
-                'description' => "Updated assignment status for job {$assignment->job->id} to {$status}",
+                'description' => "Updated job assignment {$assignment->id} status to {$request->status}",
                 'active' => true
             ]);
 
             DB::commit();
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Assignment status updated successfully',
-                'new_status' => $status,
-                'job_status' => $assignment->job->fresh()->status
-            ]);
+            return redirect()->back()->with('success', 'Assignment status updated successfully!');
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return response()->json(['error' => 'Failed to update assignment status'], 500);
+            return back()->withErrors(['error' => 'Failed to update status: ' . $e->getMessage()]);
         }
     }
 
@@ -243,52 +172,48 @@ JobActivityLogger::logJobAssigned($job, $assignedUser, $request->assignment_type
             abort(403);
         }
 
-        // Only allow removal if assignment hasn't been accepted
-        if (!in_array($assignment->status, ['assigned', 'rejected'])) {
-            return back()->withErrors(['error' => 'Cannot remove assignment that has been accepted or is in progress']);
+        try {
+            DB::beginTransaction();
+
+            $assignment->update([
+                'active' => false,
+                'updated_by' => Auth::id()
+            ]);
+
+            // Log assignment removal
+            \App\Models\Log::create([
+                'action' => 'job_assignment_removed',
+                'user_id' => Auth::id(),
+                'user_role_id' => Auth::user()->user_role_id,
+                'ip_address' => request()->ip(),
+                'description' => "Removed job assignment {$assignment->id}",
+                'active' => true
+            ]);
+
+            DB::commit();
+
+            return redirect()->route('job-assignments.index')
+                           ->with('success', 'Job assignment removed successfully!');
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return back()->withErrors(['error' => 'Failed to remove assignment: ' . $e->getMessage()]);
         }
-
-        $assignment->update([
-            'active' => false,
-            'updated_by' => Auth::id()
-        ]);
-
-        // Log the removal
-        \App\Models\Log::create([
-            'action' => 'job_assignment_removed',
-            'user_id' => Auth::id(),
-            'user_role_id' => Auth::user()->user_role_id,
-            'ip_address' => request()->ip(),
-            'description' => "Removed assignment for job {$assignment->job->id} from {$assignment->user->name}",
-            'active' => true
-        ]);
-
-        return back()->with('success', 'Assignment removed successfully');
     }
 
-    public function myAssignments(Request $request)
+    public function myAssignments()
     {
-        $userId = Auth::id();
+        $companyId = Auth::user()->company_id;
+        
+        $assignments = JobAssignment::with(['job.jobType', 'job.client', 'assignedBy'])
+            ->where('user_id', Auth::id())
+            ->whereHas('job', function ($query) use ($companyId) {
+                $query->where('company_id', $companyId)->where('active', true);
+            })
+            ->where('active', true)
+            ->orderBy('created_at', 'desc')
+            ->paginate(15);
 
-        $query = JobAssignment::with(['job.jobType', 'job.client', 'assignedBy'])
-                             ->where('user_id', $userId)
-                             ->where('active', true);
-
-        // Apply filters
-        if ($request->filled('status')) {
-            $query->where('status', $request->status);
-        }
-
-        if ($request->filled('assignment_type')) {
-            $query->where('assignment_type', $request->assignment_type);
-        }
-
-        $assignments = $query->orderBy('assigned_date', 'desc')->paginate(15);
-
-        // Get filter options
-        $statuses = ['assigned', 'accepted', 'in_progress', 'completed', 'rejected'];
-        $assignmentTypes = ['primary', 'secondary', 'supervisor', 'reviewer'];
-
-        return view('job-assignments.my-assignments', compact('assignments', 'statuses', 'assignmentTypes'));
+        return view('job-assignments.my-assignments', compact('assignments'));
     }
 }

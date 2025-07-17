@@ -255,16 +255,7 @@ Route::prefix('clients')->name('clients.')->middleware(['auth'])->group(function
     Route::put('/{client}', [\App\Http\Controllers\ClientController::class, 'update'])->name('update')->middleware('role.permission:7.3');
     Route::delete('/{client}', [\App\Http\Controllers\ClientController::class, 'destroy'])->name('destroy')->middleware('role.permission:7.3');
 });
-//employees
-Route::prefix('employees')->name('employees.')->middleware(['auth'])->group(function () {
-    Route::get('/', [\App\Http\Controllers\EmployeeController::class, 'index'])->name('index')->middleware('role.permission:6.1');
-    Route::get('/create', [\App\Http\Controllers\EmployeeController::class, 'create'])->name('create')->middleware('role.permission:6.2');
-    Route::get('/{employee}', [\App\Http\Controllers\EmployeeController::class, 'show'])->name('show')->middleware('role.permission:6.3');
-    Route::post('/', [\App\Http\Controllers\EmployeeController::class, 'store'])->name('store')->middleware('role.permission:6.2');
-    Route::get('/{employee}/edit', [\App\Http\Controllers\EmployeeController::class, 'edit'])->name('edit')->middleware('role.permission:6.4');
-    Route::put('/{employee}', [\App\Http\Controllers\EmployeeController::class, 'update'])->name('update')->middleware('role.permission:6.4');
-    Route::delete('/{employee}', [\App\Http\Controllers\EmployeeController::class, 'destroy'])->name('destroy')->middleware('role.permission:6.4');
-});
+
 //jobs
 Route::prefix('jobs')->name('jobs.')->middleware(['auth'])->group(function () {
     Route::get('/', [JobController::class, 'index'])->name('index')->middleware('role.permission:11.7');
@@ -522,4 +513,117 @@ Route::middleware(['auth'])->group(function () {
 // })->name('test')->middleware('role.permission:7.1');
 
 
+Route::middleware(['auth'])->group(function () {
+    Route::post('/jobs/{job}/status', [JobController::class, 'updateJobStatus'])
+        ->name('jobs.update-status')
+        ->middleware('role.permission:11.26');
 
+    Route::post('/jobs/bulk-status', [JobController::class, 'bulkUpdateStatus'])
+        ->name('jobs.bulk-status')
+        ->middleware('role.permission:11.27');
+
+    Route::get('/jobs/export', [JobController::class, 'exportJobs'])
+        ->name('jobs.export')
+        ->middleware('role.permission:11.28');
+});
+
+// Dashboard API Routes (Add these to the existing dashboard API section)
+Route::middleware(['auth'])->group(function () {
+    // Supervisor Dashboard API
+    Route::get('/supervisor/dashboard/quick-stats', [SupervisorDashboardController::class, 'getQuickStats'])
+        ->name('supervisor.dashboard.quick-stats')
+        ->middleware('role.permission:1.7');
+
+    Route::post('/supervisor/jobs/quick-create', [SupervisorDashboardController::class, 'createQuickJob'])
+        ->name('supervisor.jobs.quick-create')
+        ->middleware('role.permission:1.7');
+
+    // Technical Officer Dashboard API
+    Route::post('/technicalofficer/jobs/{job}/request-approval', [TechnicalOfficerDashboardController::class, 'requestApproval'])
+        ->name('technicalofficer.jobs.request-approval')
+        ->middleware('role.permission:1.6');
+
+    Route::post('/technicalofficer/tasks/{task}/status', [TechnicalOfficerDashboardController::class, 'updateTaskStatus'])
+        ->name('technicalofficer.tasks.update-status')
+        ->middleware('role.permission:1.6');
+
+    // Engineer Dashboard API
+    Route::post('/engineer/jobs/bulk-approve', [EngineerDashboardController::class, 'bulkApproveJobs'])
+        ->name('engineer.jobs.bulk-approve')
+        ->middleware('role.permission:1.5');
+
+    Route::get('/engineer/notification-counts', [EngineerDashboardController::class, 'getNotificationCounts'])
+        ->name('engineer.notification-counts')
+        ->middleware('role.permission:1.5');
+
+    // Employee Dashboard API
+    Route::get('/employee/dashboard/quick-stats', [EmployeeDashboardController::class, 'getQuickStats'])
+        ->name('employee.dashboard.quick-stats')
+        ->middleware('role.permission:1.4');
+
+    Route::get('/employee/tasks/{task}/details', [EmployeeDashboardController::class, 'getTaskDetails'])
+        ->name('employee.tasks.details')
+        ->middleware('role.permission:1.4');
+
+    // Admin Dashboard API
+    Route::get('/admin/dashboard/job-status', [AdminDashboardController::class, 'getJobStatusUpdate'])
+        ->name('admin.dashboard.job-status')
+        ->middleware('role.permission:1.3');
+
+    // Super Admin Dashboard API
+    Route::get('/superadmin/dashboard/chart-data', [SuperAdminDashboardController::class, 'getChartData'])
+        ->name('superadmin.dashboard.chart-data')
+        ->middleware('role.permission:1.2');
+});
+
+// Update the existing task extension routes section to include the missing routes:
+Route::middleware(['auth'])->group(function () {
+    // Employee can request task extension
+    Route::get('/tasks/{task}/request-extension', [TaskExtensionController::class, 'create'])
+        ->name('tasks.extension.create')
+        ->middleware('role.permission:12.1');
+
+    Route::post('/tasks/{task}/request-extension', [TaskExtensionController::class, 'requestTaskExtension'])
+        ->name('tasks.extension.store')
+        ->middleware('role.permission:12.1');
+
+    // View own extension requests
+    Route::get('/my-extension-requests', [TaskExtensionController::class, 'myRequests'])
+        ->name('tasks.extension.my-requests')
+        ->middleware('role.permission:12.2');
+
+    // View pending extension requests for approval
+    Route::get('/extension-requests', [TaskExtensionController::class, 'index'])
+        ->name('tasks.extension.index')
+        ->middleware('role.permission:12.3');
+
+    // Show specific extension request
+    Route::get('/extension-requests/{extensionRequest}', [TaskExtensionController::class, 'show'])
+        ->name('tasks.extension.show')
+        ->middleware('role.permission:12.4');
+
+    // Approve or reject extension request
+    Route::post('/extension-requests/{extensionRequest}/approve', [TaskExtensionController::class, 'approve'])
+        ->name('tasks.extension.approve')
+        ->middleware('role.permission:12.5');
+
+    Route::post('/extension-requests/{extensionRequest}/reject', [TaskExtensionController::class, 'reject'])
+        ->name('tasks.extension.reject')
+        ->middleware('role.permission:12.5');
+
+    // API endpoint for getting pending extension count
+    Route::get('/api/extension-requests/pending-count', [TaskExtensionController::class, 'getPendingCount'])
+        ->name('tasks.extension.pending-count')
+        ->middleware('role.permission:12.6');
+});
+
+// Employee Task Management Routes
+Route::middleware(['auth'])->group(function () {
+    Route::post('/tasks/{task}/start', [EmployeeTaskController::class, 'startTask'])
+        ->name('tasks.start')
+        ->middleware('role.permission:12.7');
+
+    Route::post('/tasks/{task}/complete', [EmployeeTaskController::class, 'completeTask'])
+        ->name('tasks.complete')
+        ->middleware('role.permission:12.7');
+});

@@ -4,7 +4,6 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
-use App\Models\Employee;
 use App\Models\UserRole;
 use App\Models\Log;
 use App\Models\Company;
@@ -56,14 +55,6 @@ class RegisterController extends Controller
             $rules['company_id'] = ['required', 'exists:companies,id'];
         }
 
-        // Additional validation for employee role
-        $userRole = UserRole::find($request->user_role_id);
-        if ($userRole && strtolower($userRole->name) === 'employee') {
-            $rules['employee_code'] = ['required', 'string', 'max:255', 'unique:employees,employee_code'];
-            $rules['job_title'] = ['nullable', 'string', 'max:255'];
-            $rules['department'] = ['nullable', 'string', 'max:255'];
-        }
-
         $validator = Validator::make($request->all(), $rules);
 
         if ($validator->fails()) {
@@ -80,7 +71,6 @@ class RegisterController extends Controller
             // Determine company_id based on user role
             $companyId = $isSuperAdmin ? $request->company_id : ($currentUser ? $currentUser->company_id : null);
 
-            // If no company_id is set (e.g., first user or no current user), use a default or throw error
             if (!$companyId && !$isFirstUser) {
                 throw new \Exception('Company ID is required.');
             }
@@ -94,44 +84,35 @@ class RegisterController extends Controller
                 'phone_number' => $request->phone_number,
                 'user_role_id' => $request->user_role_id,
                 'company_id' => $companyId,
-                'remember_token' => Str::random(10),
                 'active' => true,
+                'created_by' => $currentUser ? $currentUser->id : null,
             ]);
 
-            // If user role is employee, create employee record
-            if (strtolower($userRole->name) === 'employee') {
-                Employee::create([
-                    'user_id' => $user->id,
-                    'name' => $request->name,
-                    'employee_code' => $request->employee_code,
-                    'job_title' => $request->job_title,
-                    'department' => $request->department,
-                    'company_id' => $companyId,
-                    'user_role_id' => $request->user_role_id,
-                    'phone' => $request->phone_number,
+            // Log user creation
+            if ($currentUser) {
+                Log::create([
+                    'action' => 'user_registered',
+                    'user_id' => $currentUser->id,
+                    'user_role_id' => $currentUser->user_role_id,
+                    'ip_address' => $request->ip(),
+                    'description' => "Registered new user: {$user->username} with role: {$userRole->name}",
                     'active' => true,
-                    'created_by' => $user->id,
                 ]);
             }
 
-            // Log registration
-            Log::create([
-                'action' => 'user_registered',
-                'user_id' => $user->id,
-                'user_role_id' => $user->user_role_id,
-                'ip_address' => $request->ip(),
-                'description' => 'New user registered with role: ' . $userRole->name .
-                    (strtolower($userRole->name) === 'employee' ? ' (Employee record created)' : ''),
-                'active' => true,
-            ]);
-
             DB::commit();
 
-            return back()->with('success', 'Registration successful!');
+            if ($isFirstUser) {
+                // First user registration - log them in
+                Auth::login($user);
+                return redirect()->route('dashboard')->with('success', 'Registration successful! Welcome to the system.');
+            } else {
+                // Admin creating user
+                return redirect()->route('admin.users.index')->with('success', 'User registered successfully.');
+            }
 
         } catch (\Exception $e) {
             DB::rollBack();
-
             return redirect()->back()
                 ->with('error', 'Registration failed: ' . $e->getMessage())
                 ->withInput($request->except('password'));

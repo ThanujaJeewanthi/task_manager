@@ -1,5 +1,4 @@
 <?php
-
 namespace App\Http\Controllers\Dashboard;
 
 use App\Http\Controllers\Controller;
@@ -28,7 +27,6 @@ class CommonDashboardController extends Controller
             case 'technical officer':
                 return redirect()->route('technicalofficer.dashboard');
             default:
-
                 return redirect()->route('dashboard');
         }
     }

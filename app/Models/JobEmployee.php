@@ -17,7 +17,7 @@ class JobEmployee extends Model
      */
     protected $fillable = [
         'job_id',
-        'employee_id',
+        'user_id',
         'task_id',
         'custom_task',
         'start_date',
@@ -48,15 +48,15 @@ class JobEmployee extends Model
     }
 
     /**
-     * Get the employee assigned to this job.
+     * Get the user assigned to this job.
      */
-    public function employee(): BelongsTo
+    public function user(): BelongsTo
     {
-        return $this->belongsTo(Employee::class, 'employee_id');
+        return $this->belongsTo(User::class, 'user_id');
     }
 
     /**
-     * Get the task assigned to this employee.
+     * Get the task assigned to this user.
      */
     public function task(): BelongsTo
     {
@@ -77,5 +77,25 @@ class JobEmployee extends Model
     public function updater(): BelongsTo
     {
         return $this->belongsTo(User::class, 'updated_by');
+    }
+
+    /**
+     * Scope to filter by company through job relationship.
+     */
+    public function scopeForCompany($query, $companyId)
+    {
+        return $query->whereHas('job', function ($query) use ($companyId) {
+            $query->where('company_id', $companyId);
+        });
+    }
+
+    /**
+     * Scope to filter by active assignments.
+     */
+    public function scopeActive($query)
+    {
+        return $query->whereHas('job', function ($query) {
+            $query->where('active', true);
+        });
     }
 }
